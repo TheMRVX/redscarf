@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Automated Gitleaks secret scanning CI action on pushes and pull requests (`.github/workflows/gitleaks.yml`).
+
 ### Planned
 - Automated backup job for SQLite data volume.
 - Multi-language UI switcher in Admin Dashboard.
