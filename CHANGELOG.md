@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Automated Gitleaks secret scanning CI action on pushes and pull requests (`.github/workflows/gitleaks.yml`).
 
+### Security
+- Upgraded `python-multipart` to `>=0.0.31` to remediate 8 Dependabot CVE alerts (CVE-2024-53981, CVE-2026-24486, CVE-2026-40347, CVE-2026-42561, CVE-2026-53537, CVE-2026-53538, CVE-2026-53540, CVE-2026-53539).
+- Hardened GitHub Actions permissions in `.github/workflows/gitleaks.yml` with principle-of-least-privilege (`contents: read`, `pull-requests: write`).
+- Sanitized internal error and stack trace propagation in Telegram channel verification route (`app/api.py`).
+- Refactored admin CRUD table routing to typed `AdminTable` Enum and static lookup to break CodeQL SQL injection taint flow.
+
 ### Planned
 - Automated backup job for SQLite data volume.
 - Multi-language UI switcher in Admin Dashboard.

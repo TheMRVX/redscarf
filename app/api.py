@@ -1,7 +1,11 @@
+from enum import Enum
 import json
+import logging
 import secrets
 import time
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
@@ -233,6 +237,20 @@ async def upload(file: UploadFile = File(...)):
     return {"url": f"/uploads/{name}"}
 
 
+class AdminTable(str, Enum):
+    files = "files"
+    categories = "categories"
+    posts = "posts"
+    links = "links"
+
+
+SAFE_TABLE_NAMES: dict[AdminTable, str] = {
+    AdminTable.files: "files",
+    AdminTable.categories: "categories",
+    AdminTable.posts: "posts",
+    AdminTable.links: "links",
+}
+
 TABLES = {
     "files": ["title_fa", "title_en", "desc_fa", "desc_en", "sort", "active"],
     "categories": ["name_fa", "name_en", "sort"],
@@ -276,7 +294,8 @@ async def check_force_join(body: dict = Body(...)):
     try:
         me = await bot_mod.bot.get_me()
     except Exception as e:
-        raise HTTPException(502, f"Telegram unreachable: {e}")
+        logger.warning("Telegram get_me failed during force-join check: %s", e)
+        raise HTTPException(502, "Telegram service unreachable")
     for ch in bot_mod.parse_channels(str(body.get("channels", ""))):
         try:
             chat = await bot_mod.bot.get_chat(ch["chat"])
@@ -284,7 +303,8 @@ async def check_force_join(body: dict = Body(...)):
             out.append({"chat": str(ch["chat"]), "title": chat.title or "", "status": cm.status,
                         "ok": cm.status in ("administrator", "creator"), "has_link": bool(ch["url"])})
         except Exception as e:
-            out.append({"chat": str(ch["chat"]), "title": "", "ok": False, "error": str(e)[:160], "has_link": bool(ch["url"])})
+            logger.warning("Telegram channel probe failed for channel %s: %s", ch.get("chat"), e)
+            out.append({"chat": str(ch["chat"]), "title": "", "ok": False, "error": "bot_not_admin", "has_link": bool(ch["url"])})
     return out
 
 
@@ -314,49 +334,50 @@ async def put_post_files(post_id: int, body: list = Body(...)):
 
 
 @admin.get("/{table}")
-async def list_rows(table: str, limit: int = 0, offset: int = 0, q: str = ""):
-    _check(table)
+async def list_rows(table: AdminTable, limit: int = 0, offset: int = 0, q: str = ""):
+    t_name = SAFE_TABLE_NAMES[table]
     where, params = "1=1", []
-    if q.strip() and table == "files":
+    if q.strip() and table == AdminTable.files:
         where = "(title_fa LIKE ? ESCAPE '\\' OR title_en LIKE ? ESCAPE '\\' OR file_name LIKE ? ESCAPE '\\')"
         params = [_like(q.strip()[:80])] * 3
-    sql, params = _page(f"SELECT * FROM {table} WHERE {where} ORDER BY {ORDER[table]}", params, limit, offset)
+    sql, params = _page(f"SELECT * FROM {t_name} WHERE {where} ORDER BY {ORDER[t_name]}", params, limit, offset)
     return await db.fetchall(sql, params)
 
 
 @admin.post("/{table}")
-async def create_row(table: str, body: dict = Body(...)):
-    _check(table)
-    if table == "files":
+async def create_row(table: AdminTable, body: dict = Body(...)):
+    t_name = SAFE_TABLE_NAMES[table]
+    if table == AdminTable.files:
         raise HTTPException(400, "Files are added by sending them to the bot")
-    cols = [c for c in TABLES[table] if c in body]
+    cols = [c for c in TABLES[t_name] if c in body]
     if cols:
-        sql = f"INSERT INTO {table}({','.join(cols)}) VALUES({','.join('?' * len(cols))})"
+        placeholders = ",".join("?" for _ in cols)
+        sql = f"INSERT INTO {t_name}({','.join(cols)}) VALUES({placeholders})"
         new_id = await db.execute(sql, [body[c] for c in cols])
     else:
-        new_id = await db.execute(f"INSERT INTO {table} DEFAULT VALUES")
+        new_id = await db.execute(f"INSERT INTO {t_name} DEFAULT VALUES")
     return {"id": new_id}
 
 
 @admin.patch("/{table}/{row_id}")
-async def update_row(table: str, row_id: int, body: dict = Body(...)):
-    _check(table)
-    cols = [c for c in TABLES[table] if c in body]
+async def update_row(table: AdminTable, row_id: int, body: dict = Body(...)):
+    t_name = SAFE_TABLE_NAMES[table]
+    cols = [c for c in TABLES[t_name] if c in body]
     if cols:
         sets = ",".join(f"{c}=?" for c in cols)
-        await db.execute(f"UPDATE {table} SET {sets} WHERE id=?", [body[c] for c in cols] + [row_id])
+        await db.execute(f"UPDATE {t_name} SET {sets} WHERE id=?", [body[c] for c in cols] + [row_id])
     return {"ok": True}
 
 
 @admin.delete("/{table}/{row_id}")
-async def delete_row(table: str, row_id: int):
-    _check(table)
-    await db.execute(f"DELETE FROM {table} WHERE id=?", (row_id,))
-    if table == "categories":
+async def delete_row(table: AdminTable, row_id: int):
+    t_name = SAFE_TABLE_NAMES[table]
+    await db.execute(f"DELETE FROM {t_name} WHERE id=?", (row_id,))
+    if table == AdminTable.categories:
         await db.execute("UPDATE posts SET category_id=0 WHERE category_id=?", (row_id,))
-    elif table == "posts":
+    elif table == AdminTable.posts:
         await db.execute("DELETE FROM post_files WHERE post_id=?", (row_id,))
-    elif table == "files":
+    elif table == AdminTable.files:
         await db.execute("DELETE FROM post_files WHERE file_id=?", (row_id,))
     return {"ok": True}
 
